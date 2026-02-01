@@ -1,0 +1,18 @@
+{
+  "name": "singulo-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "vitest": "^1.0.0",
+    "tsup": "^8.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}
