@@ -1,11 +1,17 @@
 import { parse } from '@babel/parser';
-import traverse from '@babel/traverse';
-import generate from '@babel/generator';
+import traverseModule, { NodePath } from '@babel/traverse';
+import generateModule from '@babel/generator';
 import * as t from '@babel/types';
+
+// Handle both ESM and CJS imports
+const traverse: typeof traverseModule = (traverseModule as any).default || traverseModule;
+const generate: typeof generateModule = (generateModule as any).default || generateModule;
 
 export interface ServerBlock {
   index: number;
-  code: string;
+  code: string;          // Function body only
+  deps: string;          // Dependencies (to be hoisted)
+  params: string[];      // Parameter names for the function
 }
 
 export function transformServer(code: string, id: string): ServerBlock[] {
@@ -34,11 +40,19 @@ export function transformServer(code: string, id: string): ServerBlock[] {
             // Use a visitor on the argument (the function), not the whole CallExpression
             // to avoid picking up '$' from '$.server'
             const bodyPath = path.get('arguments.0');
+            const programScope = path.scope.getProgramParent();
+            
              if (bodyPath.isArrowFunctionExpression() || bodyPath.isFunctionExpression()) {
                  bodyPath.traverse({
                     Identifier(innerPath) {
                         if (!innerPath.isReferencedIdentifier()) return;
-                        queue.add(innerPath.node.name);
+                        const name = innerPath.node.name;
+                        
+                        // Only add identifiers that exist at program level
+                        const programBinding = programScope.getBinding(name);
+                        if (programBinding && t.isProgram(programBinding.scope.block)) {
+                            queue.add(name);
+                        }
                     }
                 });
              }
@@ -83,7 +97,8 @@ export function transformServer(code: string, id: string): ServerBlock[] {
                 if (visited.has(name)) continue;
                 visited.add(name);
                 
-                const binding = path.scope.getBinding(name);
+                // Use program scope to avoid variable shadowing
+                const binding = programScope.getBinding(name);
                 if (binding && t.isProgram(binding.scope.block)) {
                     dependencies.add(name);
                     
@@ -104,7 +119,8 @@ export function transformServer(code: string, id: string): ServerBlock[] {
             // Generate code for dependencies
             const dependencyNodes: any[] = [];
             dependencies.forEach(name => {
-                const binding = path.scope.getBinding(name);
+                // Use program scope to get the correct binding
+                const binding = programScope.getBinding(name);
                 if (binding) {
                     if (t.isImportSpecifier(binding.path.node) || t.isImportDefaultSpecifier(binding.path.node) || t.isImportNamespaceSpecifier(binding.path.node)) {
                          // It's an import. We need the parent ImportDeclaration.
@@ -138,12 +154,24 @@ export function transformServer(code: string, id: string): ServerBlock[] {
            if (!t.isBlockStatement(arg.body)) {
                body = `return ${body};`;
            }
+           
+           // Extract parameter names
+           const params = arg.params.map((param: any) => {
+               if (t.isIdentifier(param)) {
+                   return param.name;
+               } else if (t.isRestElement(param) && t.isIdentifier(param.argument)) {
+                   return '...' + param.argument.name;
+               }
+               return '';
+           }).filter((name: string) => name !== '');
 
            
-           // Combine
+           // Combine - separate deps from body
            blocks.push({
                index: serverBlockCount++,
-               code: depsCode + body
+               code: body,              // Just the function body
+               deps: depsCode,          // Dependencies to be hoisted
+               params
            });
         }
       }

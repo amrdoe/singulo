@@ -13,8 +13,11 @@ export * from './bootstrap';
 export const $ = {
   // Client-side: This will be stripped and replaced by an RPC call.
   // Server-side: This executes the callback.
-  server: async <T>(callback: () => Promise<T>): Promise<T> => {
-    return callback();
+  server: async <T, Args extends any[] = []>(
+    callback: (...args: Args) => T | Promise<T>, 
+    args?: Args
+  ): Promise<T> => {
+    return callback(...(args || [] as any));
   },
 
   stream: <T>(promises: Record<string, Promise<T>>) => {

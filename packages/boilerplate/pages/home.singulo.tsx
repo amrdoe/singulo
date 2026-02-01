@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { $ } from '@singulo/core';
 
-// Top-level dependencies that should be extracted
-const DB_URL = "postgres://localhost:5432";
+interface Message {
+    sender: string;
+    body: string;
+}
 
-function connectToDb() {
-    console.log("Connecting to", DB_URL);
-    return {
-        products: {
-            find: async (id: string) => ({ id, name: "Singulo Pro (Extracted)", price: 999 })
-        }
-    };
+const chat: Message[] = []
+
+function postMessage(sender: string, body: string) {
+    chat.push({ sender, body })
+    return chat
 }
 
 export const config = {
@@ -18,18 +18,34 @@ export const config = {
 };
 
 export default function ProductPage() {
-    const [product, setProduct] = useState<any>(null);
+    const [messages, setMessages] = useState<Message[]>([]);
 
     useEffect(() => {
-        $.server(() => connectToDb().products.find("123")).then(product => setProduct(product))
+        $.server(() => chat).then(setMessages)
     }, []);
 
-    if (!product) return <div>Loading Product...</div>;
+    if (!messages) return <div>Loading Chat...</div>;
 
     return (
         <div>
-            <h1>{product.name}</h1>
-            <p>Price: ${product.price}</p>
+            {messages.map((message: Message, index: number) => (
+                <div key={index}>
+                    <p>{message.sender}</p>
+                    <p>{message.body}</p>
+                </div>
+            ))}
+
+            <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.currentTarget);
+                const sender = formData.get("sender") as string;
+                const body = formData.get("body") as string;
+                $.server((sender, body) => postMessage(sender, body), [sender, body]).then(setMessages);
+            }}>
+                <input type="text" name="sender" />
+                <input type="text" name="body" />
+                <button type="submit">Post</button>
+            </form>
         </div>
     );
 }

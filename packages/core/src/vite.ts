@@ -67,25 +67,39 @@ export default function singulo(): Plugin {
         // effectively a registry.
         
         const blocksRegistry: string[] = [];
+        const depsMap = new Map<string, string>();  // Track unique dependencies
         
-        // We need to write the helper first
-        // And we need to make sure the imports in the extracted code work. 
-        // This is HARD because the imports are relative to the original file.
-        // WE WILL SKIP import rewriting for this MVP and just bundle everything into one messy file
-        // or just accept that relative imports might break if moved.
-        
+        // Collect all blocks and their dependencies
         for (const [id, code] of serverCodeMap.entries()) {
             const blocks = transformServer(code, id);
             blocks.forEach(block => {
+                 // Collect dependencies for hoisting
+                 if (block.deps) {
+                     // Split deps by line and add each unique one
+                     const depLines = block.deps.trim().split('\n').filter(line => line.trim());
+                     depLines.forEach(dep => {
+                         const trimmedDep = dep.trim();
+                         if (trimmedDep && !depsMap.has(trimmedDep)) {
+                             depsMap.set(trimmedDep, trimmedDep);
+                         }
+                     });
+                 }
+                 
+                 const params = block.params.length > 0 ? block.params.join(', ') : '...args';
                  blocksRegistry.push(`
-                    "${id}-${block.index}": async () => {
+                    "${id}-${block.index}": async (${params}) => {
                         ${block.code}
                     },
                  `);
             });
         }
         
+        // Combine all unique dependencies
+        const hoistedDeps = Array.from(depsMap.values()).join('\n');
+        
         const rpcHandler = `
+            ${hoistedDeps}
+            
             export default async function handler(req, res) {
                const registry = {
                   ${blocksRegistry.join('\n')}
@@ -98,12 +112,12 @@ export default function singulo(): Plugin {
                        buffers.push(chunk);
                    }
                    const data = JSON.parse(Buffer.concat(buffers).toString());
-                   const { fileId, blockIndex } = data;
+                   const { fileId, blockIndex, args = [] } = data;
                    const uniqueId = \`\${fileId}-\${blockIndex}\`;
                    
                    if (registry[uniqueId]) {
                        try {
-                           const result = await registry[uniqueId]();
+                           const result = await registry[uniqueId](...args);
                            res.status(200).json(result);
                        } catch (e) {
                            console.error(e);
@@ -145,7 +159,7 @@ export default function singulo(): Plugin {
                 req.on('data', (chunk: any) => body += chunk);
                 req.on('end', async () => {
                     try {
-                        const { fileId, blockIndex } = JSON.parse(body);
+                        const { fileId, blockIndex, args = [] } = JSON.parse(body);
                         // HERE IS THE MAGIC:
                         // We need to load the original file, extract the server block, and execute it.
                         // Since we are in Node, we can import the file! 

@@ -1,12 +1,11 @@
 import { parse } from '@babel/parser';
-import _traverse from '@babel/traverse';
-import _generate from '@babel/generator';
+import traverseModule from '@babel/traverse';
+import generateModule from '@babel/generator';
 import * as t from '@babel/types';
 
-// @ts-ignore
-const traverse = _traverse.default || _traverse;
-// @ts-ignore
-const generate = _generate.default || _generate;
+// Handle both ESM and CJS imports
+const traverse: typeof traverseModule = (traverseModule as any).default || traverseModule;
+const generate: typeof generateModule = (generateModule as any).default || generateModule;
 
 export function transformClient(code: string, id: string) {
   const ast = parse(code, {
@@ -26,13 +25,13 @@ export function transformClient(code: string, id: string) {
       ) {
         // Replace with fetch call
         const blockId = serverBlockCount++;
-        // Use a consistent ID generation strategy in real app (e.g. hash of file + index)
         const uniqueId = `${id}-${blockId}`; 
         
-        // Replace with: fetch('/api/singulo', { method: 'POST', body: JSON.stringify({ id: uniqueId, args: [] }) }).then(r => r.json())
-        // For simplicity, we assume the server block takes no arguments from closure for now, or we serialize them (advanced).
-        // The prompt says "Automatically serialize variables". 
-        // For this minimal MVP, let's just make it a simple RPC trigger.
+        // Extract args from second parameter (if present)
+        const argsParam = path.node.arguments[1];
+        const argsExpression = (argsParam && !t.isArgumentPlaceholder(argsParam) && !t.isSpreadElement(argsParam)) 
+          ? argsParam 
+          : t.arrayExpression([]);
         
         path.replaceWith(
           t.callExpression(
@@ -45,7 +44,8 @@ export function transformClient(code: string, id: string) {
                         t.memberExpression(t.identifier('JSON'), t.identifier('stringify')),
                         [t.objectExpression([
                             t.objectProperty(t.identifier('fileId'), t.stringLiteral(id)),
-                            t.objectProperty(t.identifier('blockIndex'), t.numericLiteral(blockId))
+                            t.objectProperty(t.identifier('blockIndex'), t.numericLiteral(blockId)),
+                            t.objectProperty(t.identifier('args'), argsExpression)
                         ])]
                     ))
                 ])
