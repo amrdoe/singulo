@@ -10,7 +10,7 @@ const generate: typeof generateModule = (generateModule as any).default || gener
 export interface ServerBlock {
   index: number;
   code: string;          // Function body only
-  deps: string;          // Dependencies (to be hoisted)
+  deps: string[];        // Dependencies (to be hoisted)
   params: string[];      // Parameter names for the function
 }
 
@@ -58,37 +58,7 @@ export function transformServer(code: string, id: string): ServerBlock[] {
              }
             
             // Process queue to find dependencies and their transitive dependencies
-            queue.forEach(name => {
-                if (dependencies.has(name)) return;
-                
-                const binding = path.scope.getBinding(name);
-                if (binding && t.isProgram(binding.scope.block)) {
-                    dependencies.add(name);
-                    
-                    // If it's a function or variable, we need to scan IT for dependencies too
-                    if (t.isFunctionDeclaration(binding.path.node) || t.isVariableDeclarator(binding.path.node)) {
-                        binding.path.traverse({
-                            Identifier(transitivePath) {
-                                if (!transitivePath.isReferencedIdentifier()) return;
-                                const transitiveName = transitivePath.node.name;
-                                // Add to queue if not already processed
-                                if (!dependencies.has(transitiveName)) {
-                                    queue.add(transitiveName);
-                                    // Hack: Set behaves like a queue if we add to it while iterating? 
-                                    // standard Set.forEach iteration behavior varies.
-                                    // Let's rely on re-entrant check or use a loop.
-                                }
-                            }
-                        });
-                    }
-                }
-            });
-            
-            // Set.forEach on newer JS engines might not iterate new additions. 
-            // Let's do a while loop to be robust.
-            
-            // Reset and do it properly
-            dependencies.clear();
+            // Process queue to find dependencies and their transitive dependencies
             const processQueue = Array.from(queue);
             const visited = new Set<string>();
             
@@ -142,13 +112,9 @@ export function transformServer(code: string, id: string): ServerBlock[] {
                 }
             });
             
-            // Deduplicate nodes (e.g. multiple imports from same file)
             const uniqueNodes = Array.from(new Set(dependencyNodes));
             
-            let depsCode = "";
-            if (uniqueNodes.length > 0) {
-                 depsCode = uniqueNodes.map(n => generate(n).code).join('\n') + '\n';
-            }
+            const depsList = uniqueNodes.map(n => generate(n).code);
 
            let body = generate(arg.body).code;
            if (!t.isBlockStatement(arg.body)) {
@@ -170,7 +136,7 @@ export function transformServer(code: string, id: string): ServerBlock[] {
            blocks.push({
                index: serverBlockCount++,
                code: body,              // Just the function body
-               deps: depsCode,          // Dependencies to be hoisted
+               deps: depsList,          // Dependencies to be hoisted
                params
            });
         }

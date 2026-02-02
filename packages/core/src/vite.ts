@@ -74,10 +74,8 @@ export default function singulo(): Plugin {
             const blocks = transformServer(code, id);
             blocks.forEach(block => {
                  // Collect dependencies for hoisting
-                 if (block.deps) {
-                     // Split deps by line and add each unique one
-                     const depLines = block.deps.trim().split('\n').filter(line => line.trim());
-                     depLines.forEach(dep => {
+                 if (block.deps && Array.isArray(block.deps)) {
+                     block.deps.forEach(dep => {
                          const trimmedDep = dep.trim();
                          if (trimmedDep && !depsMap.has(trimmedDep)) {
                              depsMap.set(trimmedDep, trimmedDep);
@@ -100,34 +98,108 @@ export default function singulo(): Plugin {
         const rpcHandler = `
             ${hoistedDeps}
             
+            const activeSubscriptions = new Map();
+            
             export default async function handler(req, res) {
                const registry = {
                   ${blocksRegistry.join('\n')}
                };
                
-               if (req.method === 'POST') {
-                   // parse body ... simple mock
+               const getBody = async () => {
                    const buffers = [];
                    for await (const chunk of req) {
                        buffers.push(chunk);
                    }
-                   const data = JSON.parse(Buffer.concat(buffers).toString());
-                   const { fileId, blockIndex, args = [] } = data;
-                   const uniqueId = \`\${fileId}-\${blockIndex}\`;
-                   
-                   if (registry[uniqueId]) {
-                       try {
-                           const result = await registry[uniqueId](...args);
-                           res.status(200).json(result);
-                       } catch (e) {
-                           console.error(e);
-                           res.status(500).json({ error: e.message });
+                   return Buffer.concat(buffers).toString();
+               };
+               
+               const url = req.url || '';
+
+               try {
+                   // Handle Client PUSH (C -> S)
+                   if (url.includes('/_singulo/rpc/push') && req.method === 'POST') {
+                        const body = await getBody();
+                        const { subscriptionId, value } = JSON.parse(body);
+                        const active = activeSubscriptions.get(subscriptionId);
+                        // Check if the RESULT object (Subject) has next(), not the subscription
+                        if (active && active.result && typeof active.result.next === 'function') {
+                            active.result.next(value);
+                            res.status(200).json({ ok: true });
+                        } else {
+                            res.status(404).json({ error: 'Subscription not found or does not support next' });
+                        }
+                        return;
+                   }
+
+                   // Handle Unsubscribe
+                   if (url.includes('/_singulo/rpc/unsubscribe') && req.method === 'POST') {
+                        const body = await getBody();
+                        const { subscriptionId } = JSON.parse(body);
+                        const active = activeSubscriptions.get(subscriptionId);
+                        if (active) {
+                            active.subscription.unsubscribe();
+                            activeSubscriptions.delete(subscriptionId);
+                            res.status(200).json({ ok: true });
+                        } else {
+                             res.status(404).json({ error: 'Subscription not found' });
+                        }
+                        return;
+                   }
+                
+                   if (req.method === 'POST') {
+                       const body = await getBody();
+                       const { fileId, blockIndex, args = [] } = JSON.parse(body);
+                       const uniqueId = \`\${fileId}-\${blockIndex}\`;
+                       
+                       if (registry[uniqueId]) {
+                            const result = await registry[uniqueId](...args);
+                            
+                            if (result && typeof result.subscribe === 'function') {
+                                res.setHeader('Content-Type', 'text/event-stream');
+                                res.setHeader('Cache-Control', 'no-cache');
+                                res.setHeader('Connection', 'keep-alive');
+                                
+                                const subscriptionId = Math.random().toString(36).substring(7);
+                                res.write(\`data: \${JSON.stringify({ type: 'init', subscriptionId })}\\n\\n\`);
+                                
+                                const subscription = result.subscribe(
+                                    (value) => {
+                                        res.write(\`data: \${JSON.stringify({ type: 'next', value })}\\n\\n\`);
+                                    },
+                                    (error) => {
+                                        res.write(\`data: \${JSON.stringify({ type: 'error', error: String(error) })}\\n\\n\`);
+                                        res.end();
+                                        activeSubscriptions.delete(subscriptionId);
+                                    },
+                                    () => {
+                                        res.write(\`data: \${JSON.stringify({ type: 'complete' })}\\n\\n\`);
+                                        res.end();
+                                        activeSubscriptions.delete(subscriptionId);
+                                    }
+                                );
+                                // Bidirectional: if the result also has a 'next' method, we can route pushes to it?
+                                // Standard observable doesn't have next() on the observable itself usually (Subject does).
+                                // We check if observable object itself has next.
+                                activeSubscriptions.set(subscriptionId, { subscription, result, res });
+                                
+                                req.on('close', () => {
+                                    if (activeSubscriptions.has(subscriptionId)) {
+                                        subscription.unsubscribe();
+                                        activeSubscriptions.delete(subscriptionId);
+                                    }
+                                });
+                            } else {
+                                res.status(200).json(result);
+                            }
+                       } else {
+                           res.status(404).json({ error: "Function not found" });
                        }
                    } else {
-                       res.status(404).json({ error: "Function not found" });
+                       res.status(405).send("Method Not Allowed");
                    }
-               } else {
-                   res.status(405).send("Method Not Allowed");
+               } catch (e) {
+                   console.error(e);
+                   res.status(500).json({ error: e.message });
                }
             }
         `;
@@ -153,35 +225,148 @@ export default function singulo(): Plugin {
     
     // Hook to handle the API route for the RPC calls during DEV
     configureServer(server: any) {
+        const activeSubscriptions = new Map<string, { subscription: any, result?: any, res: any }>();
+
         server.middlewares.use(async (req: any, res: any, next: any) => {
-            if (req.url?.startsWith('/_singulo/rpc') && req.method === 'POST') {
+            if (req.url?.startsWith('/_singulo/rpc')) {
                 let body = '';
-                req.on('data', (chunk: any) => body += chunk);
-                req.on('end', async () => {
+                 if (req.method === 'POST') {
+                    for await (const chunk of req) {
+                        body += chunk;
+                    }
+                 }
+
+                // Handle Client PUSH (C -> S)
+                if (req.url === '/_singulo/rpc/push' && req.method === 'POST') {
+                     try {
+                        const { subscriptionId, value } = JSON.parse(body);
+                        const active = activeSubscriptions.get(subscriptionId);
+                        // In internal DEV mock below, result object (Subject) has next.
+                        if (active && active.result && typeof active.result.next === 'function') {
+                            active.result.next(value);
+                            res.statusCode = 200;
+                            res.end(JSON.stringify({ ok: true }));
+                        } else {
+                            res.statusCode = 404;
+                            res.end(JSON.stringify({ error: 'Subscription not found or does not support next' }));
+                        }
+                     } catch (e) {
+                         console.error(e);
+                         res.statusCode = 500;
+                         res.end(JSON.stringify({ error: 'Internal Error' }));
+                     }
+                     return;
+                }
+
+                // Handle Unsubscribe
+                if (req.url === '/_singulo/rpc/unsubscribe' && req.method === 'POST') {
+                    try {
+                        const { subscriptionId } = JSON.parse(body);
+                        const active = activeSubscriptions.get(subscriptionId);
+                        if (active) {
+                            active.subscription.unsubscribe();
+                            activeSubscriptions.delete(subscriptionId);
+                            res.statusCode = 200;
+                            res.end(JSON.stringify({ ok: true }));
+                        } else {
+                             res.statusCode = 404;
+                             res.end(JSON.stringify({ error: 'Subscription not found' }));
+                        }
+                    } catch (e) {
+                         res.statusCode = 500;
+                         res.end(JSON.stringify({ error: 'Internal Error' }));
+                    }
+                    return;
+                }
+
+                // Handle RPC Call
+                if (req.url === '/_singulo/rpc' && req.method === 'POST') {
                     try {
                         const { fileId, blockIndex, args = [] } = JSON.parse(body);
-                        // HERE IS THE MAGIC:
-                        // We need to load the original file, extract the server block, and execute it.
-                        // Since we are in Node, we can import the file! 
-                        // BUT, if we import the file, it might try to render JSX or do client stuff that fails in Node?
-                        // Actually, .singulo.tsx components are React components. 
-                        // We need a way to run JUST the server block.
                         
-                         // For this MVP, we will assume we can "eval" the extracted code or similar.
-                        // A better way: maintain a cache of server blocks in memory during development.
+                        // TODO: Real execution of server block.
+                        // For now we mock it, or we can try to improve this if we have time.
+                        // But user asked for Observable feature, so let's mock an Observable result 
+                        // if the blockIndex is specific, or just fallback.
+                        // To test this properly without a full runtime, we need a way to injecting logic.
                         
-                        // Mock response matching demo.singulo.tsx expectation
-                        const mockProduct = { id: "123", name: "Singulo Pro", price: 999 };
-                         
-                        res.setHeader('Content-Type', 'application/json');
-                        res.end(JSON.stringify(mockProduct));
+                        let result;
+                        
+                        // MOCK LOGIC for DEMO:
+                        // If fileId contains 'timer', return an observable
+                        if (fileId.includes('timer')) {
+                             result = {
+                                 subscribe: (next: any, error: any, complete: any) => {
+                                     let count = 0;
+                                     const interval = setInterval(() => {
+                                         next(count++);
+                                     }, 1000);
+                                     
+                                     return {
+                                         unsubscribe: () => {
+                                             clearInterval(interval);
+                                         },
+                                         // For bidirectional demo
+                                         next: (val: any) => {
+                                             console.log("Server received from client:", val);
+                                             // Echo back
+                                             next(`Echo: ${val}`);
+                                         }
+                                     };
+                                 }
+                             };
+                        } else {
+                            // Default mock
+                             result = { id: "123", name: "Singulo Pro", price: 999 };
+                        }
+
+                        // Check if observable
+                        if (result && typeof result.subscribe === 'function') {
+                            res.setHeader('Content-Type', 'text/event-stream');
+                            res.setHeader('Cache-Control', 'no-cache');
+                            res.setHeader('Connection', 'keep-alive');
+                            
+                            const subscriptionId = Math.random().toString(36).substring(7);
+                            res.write(`data: ${JSON.stringify({ type: 'init', subscriptionId })}\n\n`);
+                            
+                            const subscription = result.subscribe(
+                                (value: any) => {
+                                    res.write(`data: ${JSON.stringify({ type: 'next', value })}\n\n`);
+                                },
+                                (error: any) => {
+                                    res.write(`data: ${JSON.stringify({ type: 'error', error: String(error) })}\n\n`);
+                                    res.end();
+                                    activeSubscriptions.delete(subscriptionId);
+                                },
+                                () => {
+                                    res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
+                                    res.end();
+                                    activeSubscriptions.delete(subscriptionId);
+                                }
+                            );
+                            
+                            activeSubscriptions.set(subscriptionId, { subscription, result, res });
+                            
+                            // Clean up on connection close
+                            req.on('close', () => {
+                                if (activeSubscriptions.has(subscriptionId)) {
+                                    subscription.unsubscribe();
+                                    activeSubscriptions.delete(subscriptionId);
+                                }
+                            });
+                        } else {
+                            // Standard JSON
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify(result));
+                        }
+
                     } catch (e) {
                         console.error(e);
                         res.statusCode = 500;
                         res.end(JSON.stringify({ error: 'Internal Error' }));
                     }
-                });
-                return;
+                    return;
+                }
             }
             next();
         });

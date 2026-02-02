@@ -40,9 +40,8 @@ describe('RPC Handler - Persistent State Integration', () => {
     // Simulate hoisting dependencies (what vite.ts does)
     const depsMap = new Map<string, string>();
     blocks.forEach(block => {
-      if (block.deps) {
-        const depLines = block.deps.trim().split('\n').filter(line => line.trim());
-        depLines.forEach(dep => {
+      if (block.deps && Array.isArray(block.deps)) {
+        block.deps.forEach(dep => {
           const trimmedDep = dep.trim();
           if (trimmedDep && !depsMap.has(trimmedDep)) {
             depsMap.set(trimmedDep, trimmedDep);
@@ -120,9 +119,8 @@ describe('RPC Handler - Persistent State Integration', () => {
     // Collect and deduplicate dependencies
     const depsMap = new Map<string, string>();
     blocks.forEach(block => {
-      if (block.deps) {
-        const depLines = block.deps.trim().split('\n').filter(line => line.trim());
-        depLines.forEach(dep => {
+      if (block.deps && Array.isArray(block.deps)) {
+        block.deps.forEach(dep => {
           const trimmedDep = dep.trim();
           if (trimmedDep && !depsMap.has(trimmedDep)) {
             depsMap.set(trimmedDep, trimmedDep);
@@ -138,9 +136,10 @@ describe('RPC Handler - Persistent State Integration', () => {
     expect(counterCount).toBe(1);
     
     // All three functions should be present
-    expect(hoistedDeps).toContain('function increment');
-    expect(hoistedDeps).toContain('function decrement');
-    expect(hoistedDeps).toContain('function reset');
+    // All three functions should be present
+    expect(blocks[0].deps.some(d => d.includes('function increment'))).toBe(true);
+    expect(blocks[1].deps.some(d => d.includes('function decrement'))).toBe(true);
+    expect(blocks[2].deps.some(d => d.includes('function reset'))).toBe(true);
   });
   
   it('should handle complex dependency chains', () => {
@@ -172,11 +171,12 @@ describe('RPC Handler - Persistent State Integration', () => {
     const blocks = transformServer(sourceCode, 'db.singulo.tsx');
     
     expect(blocks).toHaveLength(1);
+    console.log("ACTUAL DEPS:", blocks[0].deps);
     
     // Should extract all transitive dependencies
-    expect(blocks[0].deps).toContain('const db = []');
-    expect(blocks[0].deps).toContain('function validate');
-    expect(blocks[0].deps).toContain('function save');
+    expect(blocks[0].deps).toContain('const db = [];');
+    expect(blocks[0].deps.some(d => d.includes('function validate'))).toBe(true);
+    expect(blocks[0].deps.some(d => d.includes('function save'))).toBe(true);
   });
   
   it('should generate correct parameter signatures', () => {

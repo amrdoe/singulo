@@ -21,7 +21,7 @@ import { execSync } from 'child_process';
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Serve RPC
-app.post('/_singulo/rpc', (req, res) => {
+app.all(/^\/_singulo\/rpc/, (req, res) => {
     rpcHandler(req, res);
 });
 

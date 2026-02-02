@@ -35,31 +35,31 @@ export function transformClient(code: string, id: string) {
         
         path.replaceWith(
           t.callExpression(
-            t.memberExpression(
-              t.callExpression(t.identifier('fetch'), [
-                t.stringLiteral('/_singulo/rpc'),
-                t.objectExpression([
-                    t.objectProperty(t.identifier('method'), t.stringLiteral('POST')),
-                    t.objectProperty(t.identifier('body'), t.callExpression(
-                        t.memberExpression(t.identifier('JSON'), t.identifier('stringify')),
-                        [t.objectExpression([
-                            t.objectProperty(t.identifier('fileId'), t.stringLiteral(id)),
-                            t.objectProperty(t.identifier('blockIndex'), t.numericLiteral(blockId)),
-                            t.objectProperty(t.identifier('args'), argsExpression)
-                        ])]
-                    ))
-                ])
-              ]),
-              t.identifier('then')
-            ),
-            [
-              t.arrowFunctionExpression(
-                [t.identifier('r')],
-                t.callExpression(t.memberExpression(t.identifier('r'), t.identifier('json')), [])
-              )
-            ]
+             t.identifier('createRpcClient'),
+             [
+                t.stringLiteral(id),
+                t.numericLiteral(blockId),
+                argsExpression
+             ]
           )
         );
+        
+        // Ensure createRpcClient is imported
+        const program = path.findParent(p => p.isProgram());
+        if (program && program.isProgram()) {
+            const hasImport = program.node.body.some(node => 
+                t.isImportDeclaration(node) && 
+                node.source.value.includes('singulo/runtime/client')
+            );
+            
+            if (!hasImport) {
+                // We add the import to the top
+                // But typically transformations add imports in a smarter way or we need a helper.
+                // For now let's pre-pend.
+                // Actually, traversing inside Program. 
+                // We can add it to a Set and add all imports at the end of traversal or check efficiently.
+            }
+        }
       }
     },
     // Remove imports ending in .server.ts or .server.tsx
@@ -69,6 +69,15 @@ export function transformClient(code: string, id: string) {
       }
     }
   });
+
+  // Inject import
+  if (serverBlockCount > 0) {
+      const importDecl = t.importDeclaration(
+          [t.importSpecifier(t.identifier('createRpcClient'), t.identifier('createRpcClient'))],
+          t.stringLiteral('@singulo/core/runtime/client')
+      );
+      ast.program.body.unshift(importDecl);
+  }
 
   return generate(ast).code;
 }

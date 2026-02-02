@@ -11,6 +11,10 @@
     "./vite": {
       "types": "./dist/vite.d.ts",
       "default": "./dist/vite.js"
+    },
+    "./runtime/client": {
+      "types": "./dist/runtime/client.d.ts",
+      "default": "./dist/runtime/client.js"
     }
   },
   "scripts": {
@@ -28,7 +32,8 @@
     "magic-string": "^0.30.0",
     "prettier": "^3.8.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "rxjs": "^7.8.2"
   },
   "peerDependencies": {
     "vite": "^5.0.0"
