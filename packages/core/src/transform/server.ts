@@ -26,9 +26,8 @@ export function transformServer(code: string, id: string): ServerBlock[] {
   traverse(ast, {
     CallExpression(path) {
       if (
-        t.isMemberExpression(path.node.callee) &&
-        t.isIdentifier(path.node.callee.object, { name: '$' }) &&
-        t.isIdentifier(path.node.callee.property, { name: 'server' })
+        t.isIdentifier(path.node.callee) && 
+        path.node.callee.name === '$'
       ) {
         const arg = path.node.arguments[0];
         if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
@@ -38,7 +37,7 @@ export function transformServer(code: string, id: string): ServerBlock[] {
 
             // Initial scan of the server block
             // Use a visitor on the argument (the function), not the whole CallExpression
-            // to avoid picking up '$' from '$.server'
+            // to avoid picking up '$' from '$()'
             const bodyPath = path.get('arguments.0');
             const programScope = path.scope.getProgramParent();
             

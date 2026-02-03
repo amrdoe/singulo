@@ -17,11 +17,10 @@ export function transformClient(code: string, id: string) {
 
   traverse(ast, {
     CallExpression(path) {
-      // Find $.server(...)
+      // Find $(...)
       if (
-        t.isMemberExpression(path.node.callee) &&
-        t.isIdentifier(path.node.callee.object, { name: '$' }) &&
-        t.isIdentifier(path.node.callee.property, { name: 'server' })
+        t.isIdentifier(path.node.callee) &&
+        path.node.callee.name === '$'
       ) {
         // Replace with fetch call
         const blockId = serverBlockCount++;

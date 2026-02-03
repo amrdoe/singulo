@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { $ } from '@singulo/core';
+import $ from '@singulo/core';
 import { Subject, Subscription } from 'rxjs';
 
 interface Message {
@@ -14,44 +14,33 @@ export const config = {
 };
 
 export default function ProductPage() {
-    const [chatMessages, setChatMessages] = useState<Message[]>([]);
-    const [channel, setChannel] = useState<Subject<Message> | null>(null);
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [chat, setChat] = useState<Subject<Message> | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // Subscribe to the chat stream
-        // The $.server block returns an object with a subscribe method.
-        // The client runtime will promote this to a client-side Observable proxy.
-        // We act as if we get a Subject back because we need .next()
-        const subscriptionPromise = $.server(() => chatSubject);
+        let sub: Subscription | null = null;
 
-        let activeSub: Subscription | null = null;
-
-        subscriptionPromise.then((subject: Subject<Message>) => {
-            setChannel(subject);
-            activeSub = subject.subscribe((msg: Message) => {
-                setChatMessages((prev) => [...prev, msg]);
+        $(() => chatSubject).then((chat: Subject<Message>) => {
+            setChat(chat);
+            sub = chat.subscribe((msg: Message) => {
+                setMessages((prev) => [...prev, msg]);
             });
-        });
+        }).catch(err => setError(String(err)));
 
-        return () => {
-            if (activeSub) activeSub.unsubscribe();
-        };
+        return () => sub?.unsubscribe();
     }, []);
 
-    const sendMessage = (sender: string, body: string) => {
-        if (channel && channel.next) {
-            // Push message to server via the bidirectional channel
-            channel.next({ sender, body });
-        }
-    };  
+    const sendMessage = (sender: string, body: string) => chat?.next({ sender, body });
 
-    if (!channel) return <div>Connecting to chat...</div>;
+    if (error) return <div style={{ color: 'red' }}>Error: {error}</div>;
+    if (!chat) return <div>Connecting to chat...</div>;
 
     return (
         <div>
             <h1>Real-time Chat</h1>
             <div style={{ border: '1px solid #ccc', padding: '10px', height: '300px', overflowY: 'scroll', marginBottom: '10px' }}>
-                {chatMessages.map((message: Message, index: number) => (
+                {messages.map((message: Message, index: number) => (
                     <div key={index}>
                         <strong>{message.sender}:</strong> <span>{message.body}</span>
                     </div>

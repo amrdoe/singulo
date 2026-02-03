@@ -9,7 +9,7 @@ describe('RPC Handler - Persistent State Integration', () => {
   it('should maintain state across multiple function calls', async () => {
     // Simulate the source code
     const sourceCode = `
-      import { $ } from '@singulo/core';
+      import $ from '@singulo/core';
       
       const messages = [];
       
@@ -25,8 +25,8 @@ describe('RPC Handler - Persistent State Integration', () => {
       export default function Component() {
         return (
           <div>
-            <button onClick={() => $.server(() => getMessages())}>Get</button>
-            <button onClick={() => $.server((msg) => addMessage(msg), ['Hello'])}>Add</button>
+            <button onClick={() => $(() => getMessages())}>Get</button>
+            <button onClick={() => $((msg) => addMessage(msg), ['Hello'])}>Add</button>
           </div>
         );
       }
@@ -82,7 +82,7 @@ describe('RPC Handler - Persistent State Integration', () => {
   
   it('should deduplicate shared dependencies across multiple blocks', () => {
     const sourceCode = `
-      import { $ } from '@singulo/core';
+      import $ from '@singulo/core';
       
       const counter = { value: 0 };
       
@@ -104,9 +104,9 @@ describe('RPC Handler - Persistent State Integration', () => {
       export default function Component() {
         return (
           <div>
-            <button onClick={() => $.server(() => increment())}>+</button>
-            <button onClick={() => $.server(() => decrement())}>-</button>
-            <button onClick={() => $.server(() => reset())}>Reset</button>
+            <button onClick={() => $(() => increment())}>+</button>
+            <button onClick={() => $(() => decrement())}>-</button>
+            <button onClick={() => $(() => reset())}>Reset</button>
           </div>
         );
       }
@@ -144,7 +144,7 @@ describe('RPC Handler - Persistent State Integration', () => {
   
   it('should handle complex dependency chains', () => {
     const sourceCode = `
-      import { $ } from '@singulo/core';
+      import $ from '@singulo/core';
       
       const db = [];
       
@@ -161,7 +161,7 @@ describe('RPC Handler - Persistent State Integration', () => {
       
       export default function Component() {
         return (
-          <button onClick={() => $.server((item) => save(item), [{ id: 1 }])}>
+          <button onClick={() => $((item) => save(item), [{ id: 1 }])}>
             Save
           </button>
         );
@@ -182,17 +182,17 @@ describe('RPC Handler - Persistent State Integration', () => {
   it('should generate correct parameter signatures', () => {
     const testCases = [
       {
-        code: '$.server(() => value)',
+        code: '$(() => value)',
         expectedParams: [],
         description: 'no parameters'
       },
       {
-        code: '$.server((x) => process(x), [x])',
+        code: '$((x) => process(x), [x])',
         expectedParams: ['x'],
         description: 'single parameter'
       },
       {
-        code: '$.server((a, b, c) => combine(a, b, c), [a, b, c])',
+        code: '$((a, b, c) => combine(a, b, c), [a, b, c])',
         expectedParams: ['a', 'b', 'c'],
         description: 'multiple parameters'
       }
@@ -201,7 +201,7 @@ describe('RPC Handler - Persistent State Integration', () => {
     for (const testCase of testCases) {
       const { code, expectedParams, description } = testCase;
       const sourceCode = `
-        import { $ } from '@singulo/core';
+        import $ from '@singulo/core';
         const value = 42;
         function process(x) { return x; }
         function combine(a, b, c) { return [a, b, c]; }

@@ -12,6 +12,7 @@ export default function singulo(): Plugin {
   let isServer = false;
   let root = process.cwd();
   const serverCodeMap = new Map<string, string>();
+  const devServerModules = new Map<string, { version: number, modulePath: string, code: string }>();
 
   return {
     name: 'singulo-core',
@@ -236,6 +237,48 @@ export default function singulo(): Plugin {
                     }
                  }
 
+                const handleResult = (result: any, res: any, req: any) => {
+                     // Check if observable
+                    if (result && typeof result.subscribe === 'function') {
+                        res.setHeader('Content-Type', 'text/event-stream');
+                        res.setHeader('Cache-Control', 'no-cache');
+                        res.setHeader('Connection', 'keep-alive');
+                        
+                        const subscriptionId = Math.random().toString(36).substring(7);
+                        res.write(`data: ${JSON.stringify({ type: 'init', subscriptionId })}\n\n`);
+                        
+                        const subscription = result.subscribe(
+                            (value: any) => {
+                                res.write(`data: ${JSON.stringify({ type: 'next', value })}\n\n`);
+                            },
+                            (error: any) => {
+                                res.write(`data: ${JSON.stringify({ type: 'error', error: String(error) })}\n\n`);
+                                res.end();
+                                activeSubscriptions.delete(subscriptionId);
+                            },
+                            () => {
+                                res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
+                                res.end();
+                                activeSubscriptions.delete(subscriptionId);
+                            }
+                        );
+                        
+                        activeSubscriptions.set(subscriptionId, { subscription, result, res });
+                        
+                        // Clean up on connection close
+                        req.on('close', () => {
+                            if (activeSubscriptions.has(subscriptionId)) {
+                                subscription.unsubscribe();
+                                activeSubscriptions.delete(subscriptionId);
+                            }
+                        });
+                    } else {
+                        // Standard JSON
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify(result));
+                    }
+                };
+
                 // Handle Client PUSH (C -> S)
                 if (req.url === '/_singulo/rpc/push' && req.method === 'POST') {
                      try {
@@ -251,7 +294,7 @@ export default function singulo(): Plugin {
                             res.end(JSON.stringify({ error: 'Subscription not found or does not support next' }));
                         }
                      } catch (e) {
-                         console.error(e);
+                         console.error("Singulo Push Error:", e);
                          res.statusCode = 500;
                          res.end(JSON.stringify({ error: 'Internal Error' }));
                      }
@@ -284,86 +327,82 @@ export default function singulo(): Plugin {
                     try {
                         const { fileId, blockIndex, args = [] } = JSON.parse(body);
                         
-                        // TODO: Real execution of server block.
-                        // For now we mock it, or we can try to improve this if we have time.
-                        // But user asked for Observable feature, so let's mock an Observable result 
-                        // if the blockIndex is specific, or just fallback.
-                        // To test this properly without a full runtime, we need a way to injecting logic.
+                        const code = serverCodeMap.get(fileId);
+                        if (!code) {
+                            console.error(`Singulo: No server code found for ${fileId}`);
+                            res.statusCode = 404;
+                            res.end(JSON.stringify({ error: "File not found on server" }));
+                            return;
+                        }
+
+                        // Generate or retrieve module
+                        let moduleInfo = devServerModules.get(fileId);
                         
-                        let result;
-                        
-                        // MOCK LOGIC for DEMO:
-                        // If fileId contains 'timer', return an observable
-                        if (fileId.includes('timer')) {
-                             result = {
-                                 subscribe: (next: any, error: any, complete: any) => {
-                                     let count = 0;
-                                     const interval = setInterval(() => {
-                                         next(count++);
-                                     }, 1000);
-                                     
-                                     return {
-                                         unsubscribe: () => {
-                                             clearInterval(interval);
-                                         },
-                                         // For bidirectional demo
-                                         next: (val: any) => {
-                                             console.log("Server received from client:", val);
-                                             // Echo back
-                                             next(`Echo: ${val}`);
+                        // Check if code updated
+                        if (!moduleInfo || moduleInfo.code !== code) {
+                            const blocks = transformServer(code, fileId);
+                            const depsMap = new Map<string, string>();
+                            
+                            // Hoist dependencies
+                            blocks.forEach(block => {
+                                 if (block.deps && Array.isArray(block.deps)) {
+                                     block.deps.forEach(dep => {
+                                         const trimmedDep = dep.trim();
+                                         if (trimmedDep && !depsMap.has(trimmedDep)) {
+                                             depsMap.set(trimmedDep, trimmedDep);
                                          }
-                                     };
+                                     });
                                  }
-                             };
-                        } else {
-                            // Default mock
-                             result = { id: "123", name: "Singulo Pro", price: 999 };
-                        }
-
-                        // Check if observable
-                        if (result && typeof result.subscribe === 'function') {
-                            res.setHeader('Content-Type', 'text/event-stream');
-                            res.setHeader('Cache-Control', 'no-cache');
-                            res.setHeader('Connection', 'keep-alive');
-                            
-                            const subscriptionId = Math.random().toString(36).substring(7);
-                            res.write(`data: ${JSON.stringify({ type: 'init', subscriptionId })}\n\n`);
-                            
-                            const subscription = result.subscribe(
-                                (value: any) => {
-                                    res.write(`data: ${JSON.stringify({ type: 'next', value })}\n\n`);
-                                },
-                                (error: any) => {
-                                    res.write(`data: ${JSON.stringify({ type: 'error', error: String(error) })}\n\n`);
-                                    res.end();
-                                    activeSubscriptions.delete(subscriptionId);
-                                },
-                                () => {
-                                    res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
-                                    res.end();
-                                    activeSubscriptions.delete(subscriptionId);
-                                }
-                            );
-                            
-                            activeSubscriptions.set(subscriptionId, { subscription, result, res });
-                            
-                            // Clean up on connection close
-                            req.on('close', () => {
-                                if (activeSubscriptions.has(subscriptionId)) {
-                                    subscription.unsubscribe();
-                                    activeSubscriptions.delete(subscriptionId);
-                                }
                             });
-                        } else {
-                            // Standard JSON
-                            res.setHeader('Content-Type', 'application/json');
-                            res.end(JSON.stringify(result));
+
+                            const hoistedDeps = Array.from(depsMap.values()).join('\n');
+                            
+                            const exports = blocks.map(block => {
+                                const params = block.params.length > 0 ? block.params.join(', ') : '...args';
+                                return `
+                                    export const block${block.index} = async (${params}) => {
+                                        ${block.code}
+                                    };
+                                `;
+                            }).join('\n');
+
+                            const moduleContent = `
+                                ${hoistedDeps}
+                                ${exports}
+                            `;
+                            
+                            // Save to unique file
+                            const version = (moduleInfo?.version || 0) + 1;
+                            const sanitizeId = fileId.replace(/[\/\\]/g, '_').replace(/:/g, '');
+                            const tempDir = path.resolve(process.cwd(), 'node_modules/.singulo/dev');
+                            await fs.mkdir(tempDir, { recursive: true });
+                            
+                            const modulePath = path.join(tempDir, `${sanitizeId}.v${version}.mjs`);
+                            
+                            await fs.writeFile(modulePath, moduleContent);
+                            
+                            moduleInfo = { version, modulePath, code };
+                            devServerModules.set(fileId, moduleInfo);
+                            console.log(`Singulo: Compiled server module for ${fileId} at ${modulePath}`);
                         }
 
-                    } catch (e) {
-                        console.error(e);
+                        // Execute
+                        // Dynamic import requires a URL string, and needs time to load
+                        const importedModule = await import(moduleInfo.modulePath);
+                        
+                        const fnName = `block${blockIndex}`;
+                        if (importedModule[fnName]) {
+                            const result = await importedModule[fnName](...args);
+                            handleResult(result, res, req);
+                        } else {
+                             res.statusCode = 404;
+                             res.end(JSON.stringify({ error: `Function block ${blockIndex} not found` }));
+                        }
+
+                    } catch (e: any) {
+                        console.error("Singulo RPC Error:", e);
                         res.statusCode = 500;
-                        res.end(JSON.stringify({ error: 'Internal Error' }));
+                        res.end(JSON.stringify({ error: e.message }));
                     }
                     return;
                 }
