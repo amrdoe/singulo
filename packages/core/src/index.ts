@@ -3,7 +3,7 @@ export interface SinguloContext {
   response: {
     download: (data: any, options: { fileName: string }) => Response;
   };
-  params: Record<string, string>;
+  params: Record<string, string | string[]>;
 }
 
 // Global context holder (will be populated by the runtime)

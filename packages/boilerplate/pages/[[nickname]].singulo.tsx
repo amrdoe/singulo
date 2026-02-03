@@ -9,11 +9,11 @@ interface Message {
 
 const chatSubject = new Subject<Message>();
 
-export const config = {
-    route: "/",
-};
+interface Props {
+    nickname?: string;
+}
 
-export default function ProductPage() {
+export default function ProductPage({ nickname }: Props) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [chat, setChat] = useState<Subject<Message> | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -50,15 +50,14 @@ export default function ProductPage() {
             <form onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
-                const sender = formData.get("sender") as string;
                 const body = formData.get("body") as string;
-                if (sender && body) {
-                    sendMessage(sender, body);
+                if (body) {
+                    sendMessage(nickname || "Anonymous", body);
                     (e.target as HTMLFormElement).reset();
                 }
             }}>
                 <div style={{ display: 'flex', gap: '5px' }}>
-                    <input type="text" name="sender" placeholder="Name" style={{ width: '100px' }} required />
+                    <strong>{nickname || "Anonymous"}:</strong>
                     <input type="text" name="body" placeholder="Message" style={{ flex: 1 }} required />
                     <button type="submit">Send</button>
                 </div>
